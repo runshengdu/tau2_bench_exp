@@ -8,11 +8,6 @@ dumps/
 dump.rdb
 *.rdg
 logs/
-data/simulations/
-data/exp/
-data/datasets/
-data/models/
-data/analyses/
 src/experiments/model_serving/vllm_serving/.*
 .ruff_cache
 
@@ -149,7 +144,7 @@ celerybeat.pid
 
 # Environments
 .env
-.venv
+.tau2-bench
 env/
 venv/
 ENV/
