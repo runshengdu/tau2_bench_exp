@@ -113,7 +113,7 @@ make clean
 
 ### Setup LLM API keys
 
-We use [LiteLLM](https://github.com/BerriAI/litellm) to manage LLM APIs, so you can use any LLM provider supported by LiteLLM.
+We now call the [OpenAI](https://github.com/openai/openai-python) SDK directly for all LLM interactions. Provide your OpenAI-compatible API keys via environment variables.
 
 To provide your API keys, copy `.env.example` as `.env` and edit it to include your API keys.
 

@@ -370,7 +370,10 @@ class MarkdownDisplay:
     @classmethod
     def display_messages(cls, messages: list[Message]) -> str:
         """Display messages in markdown format."""
-        return "\n\n".join(cls.display_message(msg) for msg in messages)
+        return "\n\n".join(
+            cls.display_message(msg, fallback_turn_idx=idx)
+            for idx, msg in enumerate(messages)
+        )
 
     @classmethod
     def display_simulation(cls, sim: SimulationRun) -> str:
@@ -449,7 +452,10 @@ class MarkdownDisplay:
         # Add messages using the display_message method
         if sim.messages:
             output.append("\n**Messages**:")
-            output.extend(cls.display_message(msg) for msg in sim.messages)
+            output.extend(
+                cls.display_message(msg, fallback_turn_idx=idx)
+                for idx, msg in enumerate(sim.messages)
+            )
 
         return "\n\n".join(output)
 
@@ -486,13 +492,16 @@ class MarkdownDisplay:
         return "\n".join(output)
 
     @classmethod
-    def display_message(cls, msg: Message) -> str:
+    def display_message(
+        cls, msg: Message, *, fallback_turn_idx: Optional[int] = None
+    ) -> str:
         """Display a single message in markdown format."""
         # Common message components
         parts = []
 
         # Add turn index if present
-        turn_prefix = f"[TURN {msg.turn_idx}] " if msg.turn_idx is not None else ""
+        turn_idx = msg.turn_idx if msg.turn_idx is not None else fallback_turn_idx
+        turn_prefix = f"[TURN {turn_idx}] " if turn_idx is not None else ""
 
         # Format based on message type
         if isinstance(msg, AssistantMessage) or isinstance(msg, UserMessage):

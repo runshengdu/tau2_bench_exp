@@ -3,6 +3,7 @@ import multiprocessing
 import random
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import os
 from typing import Optional
 
 from loguru import logger
@@ -515,6 +516,7 @@ def run_task(
         seed=seed,
         solo_mode=solo_mode,
         validate_communication=enforce_communication_protocol,
+        step_callback=None,
     )
     simulation = orchestrator.run()
 
@@ -532,6 +534,8 @@ def run_task(
         f"FINISHED SIMULATION: Domain: {domain}, Task: {task.id}, Agent: {agent.__class__.__name__}, User: {user.__class__.__name__}. Reward: {reward_info.reward}"
     )
     return simulation
+
+
 
 
 def get_info(

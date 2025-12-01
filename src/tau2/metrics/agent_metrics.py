@@ -108,6 +108,13 @@ def compute_metrics(results: Results) -> AgentMetrics:
     - average reward
     - pass^k
     """
+    if not results.simulations:
+        logger.warning("No simulations available to compute metrics.")
+        return AgentMetrics(
+            avg_reward=float("nan"),
+            pass_hat_ks={},
+            avg_agent_cost=float("nan"),
+        )
     df, df_pass_hat_k = prepare_dfs(results)
     avg_reward = df.reward.mean()
     pass_hat_ks = {}

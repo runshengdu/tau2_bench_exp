@@ -3,7 +3,7 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 from loguru import logger
 
@@ -91,6 +91,7 @@ class Orchestrator:
         seed: Optional[int] = None,
         solo_mode: bool = False,
         validate_communication: bool = False,
+        step_callback: Optional[Callable[["Orchestrator"], None]] = None,
     ):
         """
         Initialize the Orchestrator for managing simulation between Agent, User, and Environment.
@@ -119,6 +120,7 @@ class Orchestrator:
         self.seed = seed
         self.solo_mode = solo_mode
         self.validate_communication = validate_communication
+        self.step_callback = step_callback
         self.agent_state: Optional[Any] = None
         self.user_state: Optional[UserState] = None
         self.trajectory: list[Message] = []
@@ -395,6 +397,11 @@ class Orchestrator:
         self.initialize()
         while not self.done:
             self.step()
+            if self.step_callback is not None:
+                try:
+                    self.step_callback(self)
+                except Exception as e:
+                    logger.warning(f"Step callback error: {e}")
             # Checking for maximum steps and errors only if the last message is not to the environment
             if self.to_role == Role.ENV:
                 continue

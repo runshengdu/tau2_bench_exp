@@ -1,5 +1,5 @@
 import json
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -90,6 +90,10 @@ class ParticipantMessageBase(BaseModel):
     content: Optional[str] = Field(
         description="The content of the message.", default=None
     )
+    reasoning_details: Optional[Any] = Field(
+        description="Reasoning traces returned by the LLM for this message.",
+        default=None,
+    )
     tool_calls: Optional[list[ToolCall]] = Field(
         description="The tool calls made in the message.", default=None
     )
@@ -107,6 +111,7 @@ class ParticipantMessageBase(BaseModel):
     raw_data: Optional[dict] = Field(
         description="The raw data of the message.", default=None
     )
+
 
     def validate(self):  # NOTE: It would be better to do this in the Pydantic model
         """
@@ -141,6 +146,14 @@ class ParticipantMessageBase(BaseModel):
             lines.append(f"timestamp: {self.timestamp}")
         if self.content is not None:
             lines.append(f"content: {self.content}")
+        if self.reasoning_details is not None:
+            try:
+                reasoning_repr = json.dumps(
+                    self.reasoning_details, ensure_ascii=False, indent=2
+                )
+            except TypeError:
+                reasoning_repr = str(self.reasoning_details)
+            lines.append(f"reasoning_details: {reasoning_repr}")
         if self.tool_calls is not None:
             lines.append("ToolCalls")
             lines.extend([str(tool_call) for tool_call in self.tool_calls])
@@ -155,6 +168,7 @@ class ParticipantMessageBase(BaseModel):
             self.role == other.role
             and self.content == other.content
             and self.tool_calls == other.tool_calls
+            and self.reasoning_details == other.reasoning_details
         )
 
 

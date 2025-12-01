@@ -1,25 +1,14 @@
 import json
+import os
 import re
+from functools import lru_cache
 from typing import Any, Optional
 
-import litellm
-from litellm import completion, completion_cost
-from litellm.caching.caching import Cache
-from litellm.main import ModelResponse, Usage
+import dotenv
 from loguru import logger
+from openai import OpenAI
 
-from tau2.config import (
-    DEFAULT_LLM_CACHE_TYPE,
-    DEFAULT_MAX_RETRIES,
-    LLM_CACHE_ENABLED,
-    REDIS_CACHE_TTL,
-    REDIS_CACHE_VERSION,
-    REDIS_HOST,
-    REDIS_PASSWORD,
-    REDIS_PORT,
-    REDIS_PREFIX,
-    USE_LANGFUSE,
-)
+from tau2.config import DEFAULT_LLM_AGENT, DEFAULT_LLM_USER, DEFAULT_MAX_RETRIES
 from tau2.data_model.message import (
     AssistantMessage,
     Message,
@@ -29,119 +18,103 @@ from tau2.data_model.message import (
     UserMessage,
 )
 from tau2.environment.tool import Tool
+from tau2.utils.token_cost import TOKEN_COST_PER_MILLION
 
-# litellm._turn_on_debug()
+dotenv.load_dotenv(override=True)
 
-if USE_LANGFUSE:
-    # set callbacks
-    litellm.success_callback = ["langfuse"]
-    litellm.failure_callback = ["langfuse"]
 
-litellm.drop_params = True
+def _get_env_var(*names: str) -> Optional[str]:
+    for name in names:
+        candidates = {name, name.upper(), name.lower()}
+        for candidate in candidates:
+            value = os.getenv(candidate)
+            if value:
+                return value.strip('"')
+    return None
 
-if LLM_CACHE_ENABLED:
-    if DEFAULT_LLM_CACHE_TYPE == "redis":
-        logger.info(f"LiteLLM: Using Redis cache at {REDIS_HOST}:{REDIS_PORT}")
-        litellm.cache = Cache(
-            type=DEFAULT_LLM_CACHE_TYPE,
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            password=REDIS_PASSWORD,
-            namespace=f"{REDIS_PREFIX}:{REDIS_CACHE_VERSION}:litellm",
-            ttl=REDIS_CACHE_TTL,
+
+def _resolve_model_override(model: str) -> tuple[Optional[str], Optional[str]]:
+    model_lc = model.lower()
+    if model_lc.startswith("deepseek"):
+        return (
+            _get_env_var("deepseek_base_url"),
+            _get_env_var("deepseek_api_key"),
         )
-    elif DEFAULT_LLM_CACHE_TYPE == "local":
-        logger.info("LiteLLM: Using local cache")
-        litellm.cache = Cache(
-            type="local",
-            ttl=REDIS_CACHE_TTL,
+    if model_lc.startswith("kimi"):
+        return (
+            _get_env_var("kimi_base_url"),
+            _get_env_var("KIMI_API_KEY", "kimi_api_key"),
         )
-    else:
-        raise ValueError(
-            f"Invalid cache type: {DEFAULT_LLM_CACHE_TYPE}. Should be 'redis' or 'local'"
+
+    if model_lc.startswith(("openai", "google", "anthropic")):
+        return (
+            _get_env_var("openrouter_base_url"),
+            _get_env_var("openrouter_api_key"),
         )
-    litellm.enable_cache()
-else:
-    logger.info("LiteLLM: Cache is disabled")
-    litellm.disable_cache()
+    if model_lc.startswith("glm"):
+        return (
+            _get_env_var("glm_base_url"),
+            _get_env_var("glm_api_key"),
+        )
+    if model_lc.startswith("minimax"):
+        return (
+            _get_env_var("minimax_base_url"),
+            _get_env_var("minimax_api_key"),
+        )
+    return (None, None)
 
 
-ALLOW_SONNET_THINKING = False
-
-if not ALLOW_SONNET_THINKING:
-    logger.warning("Sonnet thinking is disabled")
-
-
-def _parse_ft_model_name(model: str) -> str:
-    """
-    Parse the ft model name from the litellm model name.
-    e.g: "ft:gpt-4.1-mini-2025-04-14:sierra::BSQA2TFg" -> "gpt-4.1-mini-2025-04-14"
-    """
-    pattern = r"ft:(?P<model>[^:]+):(?P<provider>\w+)::(?P<id>\w+)"
-    match = re.match(pattern, model)
-    if match:
-        return match.group("model")
-    else:
-        return model
+@lru_cache(maxsize=None)
+def _build_client(model: str, max_retries: int) -> OpenAI:
+    base_url, api_key = _resolve_model_override(model)
+    kwargs: dict[str, Any] = {"max_retries": max_retries}
+    if base_url:
+        kwargs["base_url"] = base_url
+    if api_key:
+        kwargs["api_key"] = api_key
+    return OpenAI(**kwargs)
 
 
-def get_response_cost(response: ModelResponse) -> float:
-    """
-    Get the cost of the response from the litellm completion.
-    """
-    response.model = _parse_ft_model_name(
-        response.model
-    )  # FIXME: Check Litellm, passing the model to completion_cost doesn't work.
-    try:
-        cost = completion_cost(completion_response=response)
-    except Exception as e:
-        logger.error(e)
-        return 0.0
-    return cost
+def _get_client_for_model(model: str, max_retries: Optional[int]) -> OpenAI:
+    retries = max_retries if max_retries is not None else DEFAULT_MAX_RETRIES
+    return _build_client(model.lower(), retries)
+
+def get_response_cost(response: Any) -> float:
+    return 0.0
 
 
-def get_response_usage(response: ModelResponse) -> Optional[dict]:
-    usage: Optional[Usage] = response.get("usage")
+def get_response_usage(response: Any) -> Optional[dict]:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        choices = getattr(response, "choices", None)
+        if choices:
+            first_choice = choices[0]
+            usage = getattr(first_choice, "usage", None)
     if usage is None:
         return None
+
+    completion_tokens = getattr(usage, "completion_tokens", None)
+    prompt_tokens = getattr(usage, "prompt_tokens", None)
+
+    if completion_tokens is None and prompt_tokens is None and isinstance(usage, dict):
+        completion_tokens = usage.get("completion_tokens")
+        prompt_tokens = usage.get("prompt_tokens")
+
+    if completion_tokens is None and prompt_tokens is None:
+        return None
+
     return {
-        "completion_tokens": usage.completion_tokens,
-        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": completion_tokens or 0,
+        "prompt_tokens": prompt_tokens or 0,
     }
 
 
-def to_tau2_messages(
-    messages: list[dict], ignore_roles: set[str] = set()
-) -> list[Message]:
-    """
-    Convert a list of messages from a dictionary to a list of Tau2 messages.
-    """
-    tau2_messages = []
-    for message in messages:
-        role = message["role"]
-        if role in ignore_roles:
-            continue
-        if role == "user":
-            tau2_messages.append(UserMessage(**message))
-        elif role == "assistant":
-            tau2_messages.append(AssistantMessage(**message))
-        elif role == "tool":
-            tau2_messages.append(ToolMessage(**message))
-        elif role == "system":
-            tau2_messages.append(SystemMessage(**message))
-        else:
-            raise ValueError(f"Unknown message type: {role}")
-    return tau2_messages
+def to_openai_messages(messages: list[Message]) -> list[dict]:
 
-
-def to_litellm_messages(messages: list[Message]) -> list[dict]:
-    """
-    Convert a list of Tau2 messages to a list of litellm messages.
-    """
-    litellm_messages = []
+    openai_messages = []
     for message in messages:
         if isinstance(message, UserMessage):
-            litellm_messages.append({"role": "user", "content": message.content})
+            openai_messages.append({"role": "user", "content": message.content})
         elif isinstance(message, AssistantMessage):
             tool_calls = None
             if message.is_tool_call():
@@ -157,15 +130,16 @@ def to_litellm_messages(messages: list[Message]) -> list[dict]:
                     }
                     for tc in message.tool_calls
                 ]
-            litellm_messages.append(
-                {
-                    "role": "assistant",
-                    "content": message.content,
-                    "tool_calls": tool_calls,
-                }
-            )
+            openai_message = {
+                "role": "assistant",
+                "content": message.content,
+                "tool_calls": tool_calls,
+            }
+            if message.reasoning_details is not None:
+                openai_message["reasoning_details"] = message.reasoning_details
+            openai_messages.append(openai_message)
         elif isinstance(message, ToolMessage):
-            litellm_messages.append(
+            openai_messages.append(
                 {
                     "role": "tool",
                     "content": message.content,
@@ -173,8 +147,8 @@ def to_litellm_messages(messages: list[Message]) -> list[dict]:
                 }
             )
         elif isinstance(message, SystemMessage):
-            litellm_messages.append({"role": "system", "content": message.content})
-    return litellm_messages
+            openai_messages.append({"role": "system", "content": message.content})
+    return openai_messages
 
 
 def generate(
@@ -196,81 +170,220 @@ def generate(
 
     Returns: A tuple containing the message and the cost.
     """
-    if kwargs.get("num_retries") is None:
-        kwargs["num_retries"] = DEFAULT_MAX_RETRIES
-
-    if model.startswith("claude") and not ALLOW_SONNET_THINKING:
-        kwargs["thinking"] = {"type": "disabled"}
-    litellm_messages = to_litellm_messages(messages)
-    tools = [tool.openai_schema for tool in tools] if tools else None
-    if tools and tool_choice is None:
+    num_retries = kwargs.pop("num_retries", None)
+    openai_messages = to_openai_messages(messages)
+    openai_tools = [tool.openai_schema for tool in tools] if tools else None
+    if openai_tools and tool_choice is None:
         tool_choice = "auto"
+    client = _get_client_for_model(model, num_retries)
+    content_parts: list[str] = []
+    tool_calls_data: dict[int, dict[str, Any]] = {}
+    role: Optional[str] = None
+    reasoning = None
+    finish_reason = None
+    usage: Optional[dict] = None
+    raw_data: Optional[dict] = None
+    model_id: Optional[str] = None
+    last_chunk: Any = None
+
     try:
-        response = completion(
+        stream = client.chat.completions.create(
             model=model,
-            messages=litellm_messages,
-            tools=tools,
+            messages=openai_messages,
+            tools=openai_tools,
             tool_choice=tool_choice,
+            stream=True,
             **kwargs,
         )
+        for chunk in stream:
+            last_chunk = chunk
+            if getattr(chunk, "model", None) is not None:
+                model_id = chunk.model
+
+            chunk_usage = get_response_usage(chunk)
+            if chunk_usage is not None:
+                usage = chunk_usage
+
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+
+            choice = choices[0]
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                continue
+
+            delta_role = getattr(delta, "role", None)
+            if delta_role is not None and role is None:
+                role = delta_role
+
+            delta_content = getattr(delta, "content", None)
+            if delta_content:
+                content_parts.append(delta_content)
+
+            delta_tool_calls = getattr(delta, "tool_calls", None)
+            if delta_tool_calls:
+                for idx, tc in enumerate(delta_tool_calls):
+                    tc_index = getattr(tc, "index", None)
+                    if tc_index is None:
+                        tc_index = idx
+                    if tc_index not in tool_calls_data:
+                        tool_calls_data[tc_index] = {
+                            "id": None,
+                            "name": None,
+                            "arguments": "",
+                        }
+                    data = tool_calls_data[tc_index]
+                    if getattr(tc, "id", None):
+                        data["id"] = tc.id
+                    function = getattr(tc, "function", None)
+                    if function is not None:
+                        if getattr(function, "name", None):
+                            data["name"] = function.name
+                        if getattr(function, "arguments", None):
+                            data["arguments"] += function.arguments or ""
+
+            delta_reasoning = getattr(delta, "reasoning_details", None)
+            if delta_reasoning is None:
+                delta_reasoning = getattr(delta, "reasoning_content", None)
+            if delta_reasoning:
+                reasoning = delta_reasoning
+
+            if getattr(choice, "finish_reason", None) is not None:
+                finish_reason = choice.finish_reason
     except Exception as e:
         logger.error(e)
         raise e
-    cost = get_response_cost(response)
-    usage = get_response_usage(response)
-    response = response.choices[0]
-    try:
-        finish_reason = response.finish_reason
-        if finish_reason == "length":
-            logger.warning("Output might be incomplete due to token limit!")
-    except Exception as e:
-        logger.error(e)
-        raise e
-    assert response.message.role == "assistant", (
+
+    if finish_reason == "length":
+        logger.warning("Output might be incomplete due to token limit!")
+
+    if role is None:
+        role = "assistant"
+    assert role == "assistant", (
         "The response should be an assistant message"
     )
-    content = response.message.content
-    tool_calls = response.message.tool_calls or []
-    tool_calls = [
-        ToolCall(
-            id=tool_call.id,
-            name=tool_call.function.name,
-            arguments=json.loads(tool_call.function.arguments),
-        )
-        for tool_call in tool_calls
-    ]
-    tool_calls = tool_calls or None
 
+    content = "".join(content_parts) if content_parts else ""
+
+    tool_calls_list: list[ToolCall] = []
+    for index in sorted(tool_calls_data.keys()):
+        data = tool_calls_data[index]
+        if not data.get("name"):
+            continue
+        arguments_str = data.get("arguments") or "{}"
+        try:
+            arguments = json.loads(arguments_str)
+        except Exception:
+            logger.warning(
+                f"Failed to parse tool call arguments as JSON: {arguments_str}"
+            )
+            arguments = {}
+        tool_calls_list.append(
+            ToolCall(
+                id=data.get("id"),
+                name=data["name"],
+                arguments=arguments,
+            )
+        )
+    tool_calls = tool_calls_list or None
+
+    if last_chunk is not None:
+        try:
+            raw_data = last_chunk.model_dump()
+        except Exception:
+            raw_data = None
+
+    if isinstance(raw_data, dict):
+        raw_data["request_model"] = model
+        if model_id is not None and "model" not in raw_data:
+            raw_data["model"] = model_id
+
+    # Build assistant message with usage/raw_data attached
     message = AssistantMessage(
         role="assistant",
         content=content,
+        reasoning_details=reasoning,
         tool_calls=tool_calls,
-        cost=cost,
+        cost=None,
         usage=usage,
-        raw_data=response.to_dict(),
+        raw_data=raw_data,
     )
+
+    # Compute per-message cost using the same logic as aggregate get_cost
+    try:
+        res = get_cost([message])
+    except Exception as e:
+        logger.warning(f"Failed to compute per-message cost: {e}")
+    else:
+        if res is not None:
+            agent_cost, _ = res
+            message.cost = agent_cost
+
     return message
 
 
 def get_cost(messages: list[Message]) -> tuple[float, float] | None:
-    """
-    Get the cost of the interaction between the agent and the user.
-    Returns None if any message has no cost.
-    """
-    agent_cost = 0
-    user_cost = 0
+    agent_cost = 0.0
+    user_cost = 0.0
+    has_cost = False
+
     for message in messages:
-        if isinstance(message, ToolMessage):
+        # Only assistant and user messages incur LLM cost
+        if not isinstance(message, (AssistantMessage, UserMessage)):
             continue
-        if message.cost is not None:
+
+        usage = message.usage
+        if not usage:
+            continue
+
+        # Try to get the actual model id from the raw response first
+        model_name = None
+        if isinstance(message.raw_data, dict):
+            # Prefer the original requested model name if present, fall back to provider model id
+            model_name = message.raw_data.get("request_model") or message.raw_data.get(
+                "model"
+            )
+
+        # Fallback to defaults if model is missing
+        if not model_name:
             if isinstance(message, AssistantMessage):
-                agent_cost += message.cost
+                model_name = DEFAULT_LLM_AGENT
             elif isinstance(message, UserMessage):
-                user_cost += message.cost
-        else:
-            logger.warning(f"Message {message.role}: {message.content} has no cost")
-            return None
-    return agent_cost, user_cost
+                model_name = DEFAULT_LLM_USER
+
+        if not model_name:
+            continue
+
+        key = str(model_name).lower()
+        # Handle simple fine-tuned naming like ft:base:provider::id
+        if key.startswith("ft:"):
+            parts = key.split(":", 2)
+            if len(parts) >= 2 and parts[1]:
+                key = parts[1]
+
+        price = TOKEN_COST_PER_MILLION.get(key)
+        if not price:
+            continue
+
+        prompt_tokens = usage.get("prompt_tokens", 0) or 0
+        completion_tokens = usage.get("completion_tokens", 0) or 0
+
+        input_cost = (prompt_tokens / 1_000_000.0) * float(price["input"])
+        output_cost = (completion_tokens / 1_000_000.0) * float(price["output"])
+        total_cost = input_cost + output_cost
+
+        if isinstance(message, AssistantMessage):
+            agent_cost += total_cost
+            has_cost = True
+        elif isinstance(message, UserMessage):
+            user_cost += total_cost
+            has_cost = True
+
+    if not has_cost:
+        return None
+
+    return round(agent_cost, 6), round(user_cost, 6)
 
 
 def get_token_usage(messages: list[Message]) -> dict:
