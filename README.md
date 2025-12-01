@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # $\tau^2$-Bench: Evaluating Conversational Agents in a Dual-Control Environment
 
 [![python](https://img.shields.io/badge/Python-3.10%2B-blue.svg?style=flat&logo=python&logoColor=white)](https://www.python.org)
@@ -479,3 +480,6 @@ sequenceDiagram
       url={https://arxiv.org/abs/2506.07982}, 
 }
 ```
+=======
+# tau3_bench_exp
+>>>>>>> 02612837a379c9dff589080ddbf35acdd8b7871c
