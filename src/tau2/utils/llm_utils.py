@@ -181,6 +181,7 @@ def generate(
     role: Optional[str] = None
     reasoning: Optional[Any] = None
     reasoning_parts: list[str] = []
+    reasoning_list: list[Any] = []
     finish_reason = None
     usage: Optional[dict] = None
     raw_data: Optional[dict] = None
@@ -254,6 +255,9 @@ def generate(
                 if isinstance(delta_reasoning, str):
                     reasoning_parts.append(delta_reasoning)
                     reasoning = "".join(reasoning_parts)
+                elif isinstance(delta_reasoning, list):
+                    reasoning_list.extend(delta_reasoning)
+                    reasoning = reasoning_list
                 else:
                     # For non-string payloads, keep the last non-empty value
                     reasoning = delta_reasoning
