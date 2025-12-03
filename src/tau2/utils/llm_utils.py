@@ -340,7 +340,7 @@ def generate(
     message = AssistantMessage(
         role="assistant",
         content=content,
-        #reasoning_details=reasoning,
+        reasoning_details=reasoning,
         tool_calls=tool_calls,
         cost=None,
         usage=usage,
