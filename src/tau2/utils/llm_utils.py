@@ -109,13 +109,22 @@ def get_response_usage(response: Any) -> Optional[dict]:
     }
 
 
-def to_openai_messages(messages: list[Message]) -> list[dict]:
-
+def to_openai_messages(messages: list[Message], model: str = "") -> list[dict]:
+    """Convert internal messages to OpenAI-compatible format.
+    
+    Different models use different field names for reasoning:
+    - DeepSeek Reasoner: reasoning_content (required for all assistant messages)
+    - OpenRouter/Anthropic: reasoning_details
+    """
+    model_lc = model.lower()
+    is_deepseek_reasoner = "deepseek-reasoner" in model_lc or "deepseek-r1" in model_lc
+    
     openai_messages = []
     for message in messages:
         if isinstance(message, UserMessage):
             openai_messages.append({"role": "user", "content": message.content})
         elif isinstance(message, AssistantMessage):
+            # Standard OpenAI/OpenRouter format
             tool_calls = None
             if message.is_tool_call():
                 tool_calls = [
@@ -130,19 +139,37 @@ def to_openai_messages(messages: list[Message]) -> list[dict]:
                     }
                     for tc in message.tool_calls
                 ]
+            # Use None instead of empty string for content
+            content = message.content if message.content else None
             openai_message = {
                 "role": "assistant",
-                "content": message.content,
+                "content": content,
                 "tool_calls": tool_calls,
             }
+            # Pass reasoning back using the appropriate field name
             if message.reasoning_details is not None:
-                openai_message["reasoning_details"] = message.reasoning_details
+                if is_deepseek_reasoner:
+                    # DeepSeek uses reasoning_content field
+                    # Convert list format to string if needed
+                    reasoning = message.reasoning_details
+                    if isinstance(reasoning, list):
+                        # Extract text from structured reasoning
+                        reasoning = "".join(
+                            item.get("text", "") or item.get("summary", "") or ""
+                            for item in reasoning if isinstance(item, dict)
+                        )
+                    openai_message["reasoning_content"] = reasoning if reasoning else ""
+                else:
+                    openai_message["reasoning_details"] = message.reasoning_details
+            elif is_deepseek_reasoner:
+                # DeepSeek requires reasoning_content even if empty
+                openai_message["reasoning_content"] = ""
             openai_messages.append(openai_message)
         elif isinstance(message, ToolMessage):
             openai_messages.append(
                 {
                     "role": "tool",
-                    "content": message.content,
+                    "content": message.content if message.content else "(no output)",
                     "tool_call_id": message.id,
                 }
             )
@@ -171,7 +198,7 @@ def generate(
     Returns: A tuple containing the message and the cost.
     """
     num_retries = kwargs.pop("num_retries", None)
-    openai_messages = to_openai_messages(messages)
+    openai_messages = to_openai_messages(messages, model=model)
     openai_tools = [tool.openai_schema for tool in tools] if tools else None
     if openai_tools and tool_choice is None:
         tool_choice = "auto"
@@ -182,6 +209,8 @@ def generate(
     reasoning: Optional[Any] = None
     reasoning_parts: list[str] = []
     reasoning_list: list[Any] = []
+    reasoning_acc: dict[tuple, dict[str, Any]] = {}
+    reasoning_order: list[tuple] = []
     finish_reason = None
     usage: Optional[dict] = None
     raw_data: Optional[dict] = None
@@ -189,6 +218,7 @@ def generate(
     last_chunk: Any = None
 
     try:
+        
         stream = client.chat.completions.create(
             model=model,
             messages=openai_messages,
@@ -256,8 +286,45 @@ def generate(
                     reasoning_parts.append(delta_reasoning)
                     reasoning = "".join(reasoning_parts)
                 elif isinstance(delta_reasoning, list):
-                    reasoning_list.extend(delta_reasoning)
-                    reasoning = reasoning_list
+                    # For list-based structured reasoning (e.g., OpenAI/Gemini),
+                    # aggregate entries by (index, type, format) and concatenate
+                    # their string fields (summary/text/data) across chunks.
+                    for item in delta_reasoning:
+                        if not isinstance(item, dict):
+                            reasoning_list.append(item)
+                            continue
+
+                        key = (
+                            item.get("index"),
+                            item.get("type"),
+                            item.get("format"),
+                        )
+
+                        if key not in reasoning_acc:
+                            reasoning_acc[key] = {}
+                            reasoning_order.append(key)
+
+                        acc_item = reasoning_acc[key]
+
+                        # Copy all fields, concatenating string content fields
+                        for k, v in item.items():
+                            if k in ("summary", "text", "data"):
+                                # Concatenate content string fields across chunks
+                                if isinstance(v, str):
+                                    prev = acc_item.get(k, "") or ""
+                                    acc_item[k] = prev + v
+                            elif k == "signature":
+                                # Concatenate signature across chunks
+                                if isinstance(v, str):
+                                    prev = acc_item.get(k, "") or ""
+                                    acc_item[k] = prev + v
+                            elif k not in acc_item:
+                                # Copy other fields once
+                                acc_item[k] = v
+
+                    if reasoning_order:
+                        reasoning_list = [reasoning_acc[k] for k in reasoning_order]
+                        reasoning = reasoning_list
                 else:
                     # For non-string payloads, keep the last non-empty value
                     reasoning = delta_reasoning
