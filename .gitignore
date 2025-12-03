@@ -145,11 +145,6 @@ celerybeat.pid
 # Environments
 .env
 .tau2-bench
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
 
 # Spyder project settings
 .spyderproject
