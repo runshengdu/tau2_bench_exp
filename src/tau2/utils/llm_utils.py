@@ -179,7 +179,8 @@ def generate(
     content_parts: list[str] = []
     tool_calls_data: dict[int, dict[str, Any]] = {}
     role: Optional[str] = None
-    reasoning = None
+    reasoning: Optional[Any] = None
+    reasoning_parts: list[str] = []
     finish_reason = None
     usage: Optional[dict] = None
     raw_data: Optional[dict] = None
@@ -194,6 +195,8 @@ def generate(
             tool_choice=tool_choice,
             stream=True,
             **kwargs,
+            extra_body={"reasoning": {"enabled": True}},
+
         )
         for chunk in stream:
             last_chunk = chunk
@@ -247,7 +250,13 @@ def generate(
             if delta_reasoning is None:
                 delta_reasoning = getattr(delta, "reasoning_content", None)
             if delta_reasoning:
-                reasoning = delta_reasoning
+                # For string-based streaming reasoning, accumulate all pieces
+                if isinstance(delta_reasoning, str):
+                    reasoning_parts.append(delta_reasoning)
+                    reasoning = "".join(reasoning_parts)
+                else:
+                    # For non-string payloads, keep the last non-empty value
+                    reasoning = delta_reasoning
 
             if getattr(choice, "finish_reason", None) is not None:
                 finish_reason = choice.finish_reason
@@ -295,6 +304,34 @@ def generate(
             raw_data = None
 
     if isinstance(raw_data, dict):
+        choices = raw_data.get("choices")
+        if isinstance(choices, list) and choices:
+            first_choice = choices[0]
+            aggregated_delta: dict[str, Any] = {}
+
+            if role is not None:
+                aggregated_delta["role"] = role
+            if content:
+                aggregated_delta["content"] = content
+            if reasoning is not None:
+                aggregated_delta["reasoning_details"] = reasoning
+            if tool_calls:
+                aggregated_delta["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments),
+                        },
+                    }
+                    for tc in tool_calls
+                ]
+
+            first_choice["delta"] = aggregated_delta
+            if finish_reason is not None:
+                first_choice["finish_reason"] = finish_reason
+
         raw_data["request_model"] = model
         if model_id is not None and "model" not in raw_data:
             raw_data["model"] = model_id
@@ -303,12 +340,27 @@ def generate(
     message = AssistantMessage(
         role="assistant",
         content=content,
-        reasoning_details=reasoning,
+        #reasoning_details=reasoning,
         tool_calls=tool_calls,
         cost=None,
         usage=usage,
         raw_data=raw_data,
     )
+
+    if not (message.has_text_content() or message.is_tool_call()):
+        if isinstance(raw_data, dict):
+            try:
+                raw_keys = list(raw_data.keys())
+            except Exception:
+                raw_keys = []
+        else:
+            raw_keys = []
+        error_msg = (
+            "LLM returned an empty assistant message (no content or tool calls). "
+            f"model={model}, raw_data keys={raw_keys}"
+        )
+        logger.error(error_msg)
+        raise ValueError(error_msg)
 
     # Compute per-message cost using the same logic as aggregate get_cost
     try:
