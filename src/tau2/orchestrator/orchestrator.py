@@ -21,7 +21,6 @@ from tau2.data_model.tasks import EnvFunctionCall, InitializationData, Task
 from tau2.environment.environment import Environment, EnvironmentInfo
 from tau2.user.base import BaseUser, UserError, is_valid_user_history_message
 from tau2.user.user_simulator import DummyUser, UserSimulator, UserState
-from tau2.utils.llm_utils import get_cost
 from tau2.utils.utils import format_time, get_now
 
 
@@ -32,7 +31,7 @@ class Role(str, Enum):
 
 
 DEFAULT_FIRST_AGENT_MESSAGE = AssistantMessage(
-    role="assistant", content="Hi! How can I help you today?", cost=0.0
+    role="assistant", content="Hi! How can I help you today?"
 )
 
 
@@ -433,11 +432,6 @@ class Orchestrator:
         # Wrap up the simulation
         duration = time.perf_counter() - start
         messages = self.get_trajectory()
-        res = get_cost(messages)
-        if res is None:
-            agent_cost, user_cost = None, None
-        else:
-            agent_cost, user_cost = res
         simulation_run = SimulationRun(
             id=str(uuid.uuid4()),
             task_id=self.task.id,
@@ -446,8 +440,8 @@ class Orchestrator:
             duration=duration,
             termination_reason=self.termination_reason.value,
             reward_info=None,
-            user_cost=user_cost,
-            agent_cost=agent_cost,
+            user_cost=None,
+            agent_cost=None,
             messages=messages,
             seed=self.seed,
         )

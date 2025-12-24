@@ -165,7 +165,6 @@ def get_metrics(
             pass_2=metrics.pass_hat_ks.get(2),
             pass_3=metrics.pass_hat_ks.get(3),
             pass_4=metrics.pass_hat_ks.get(4),
-            cost=metrics.avg_agent_cost,
         )
 
     return domain_metrics, domain_results, default_model, default_user_simulator
@@ -208,10 +207,6 @@ def validate_submission_metrics(
         if submitted_results.pass_4 != computed_results.pass_4:
             warnings.append(
                 f"Pass^4 for {domain} does not match computed results {computed_results.pass_4}"
-            )
-        if submitted_results.cost != computed_results.cost:
-            warnings.append(
-                f"Cost for {domain} does not match computed results {computed_results.cost}"
             )
     if num_warnings > 0:
         console.print(f"❌ {num_warnings} warnings found", style="red")
@@ -337,7 +332,6 @@ def prepare_submission(
                 pass_2=metrics.pass_hat_ks.get(2) * 100,
                 pass_3=metrics.pass_hat_ks.get(3) * 100,
                 pass_4=metrics.pass_hat_ks.get(4) * 100,
-                cost=metrics.avg_agent_cost,
             )
 
             console.print(

@@ -1,0 +1,83 @@
+# LLM Model Configuration
+# This file defines the available language models and their configurations
+
+# Available models
+default:
+  base_url: <base_url>
+  api_key: "${DEFAULT_LLM_API_KEY}"
+  temperature: 0.0
+
+models:
+  - name: openai/gpt-5.2
+    temperature: 1.0
+    base_url: https://openrouter.ai/api/v1
+    api_key: "${OPENROUTER_API_KEY}"
+    extra_body: {"reasoning": {"effort": "high"}}
+
+
+  - name: anthropic/claude-sonnet-4.5
+    temperature: 1.0
+    base_url: https://openrouter.ai/api/v1
+    api_key: "${OPENROUTER_API_KEY}"
+    extra_body: {reasoning: {effort: "high"}}
+
+
+  - name: google/gemini-3-pro-preview
+    temperature: 1.0
+    base_url: https://openrouter.ai/api/v1
+    api_key: "${OPENROUTER_API_KEY}"
+    
+
+  - name: google/gemini-3-flash-preview
+    temperature: 1.0
+    base_url: https://openrouter.ai/api/v1
+    api_key: "${OPENROUTER_API_KEY}"
+    extra_body: {reasoning: {effort: "high"}}
+
+  - name: minimax-m2
+    temperature: 1.0
+    base_url: https://api.minimaxi.com/v1
+    api_key: "${MINIMAX_API_KEY}"
+  
+  - name: minimax-m2.1
+    temperature: 1.0
+    base_url: https://api.minimaxi.com/v1
+    api_key: "${MINIMAX_API_KEY}"
+  
+  - name: deepseek-chat
+    temperature: 0.0
+    base_url: https://api.deepseek.com
+    api_key: "${DEEPSEEK_API_KEY}"
+
+
+  - name: deepseek-reasoner
+    temperature: 1.0
+    base_url: https://api.deepseek.com
+    api_key: "${DEEPSEEK_API_KEY}"
+
+  
+  - name: glm-4.6
+    temperature: 1.0
+    base_url: https://open.bigmodel.cn/api/paas/v4
+    api_key: "${GLM_API_KEY}"
+    extra_body:
+      thinking:
+        type: disabled
+    #turn off thinking for evaluation
+
+
+  - name: glm-4.7
+    temperature: 1.0
+    base_url: https://open.bigmodel.cn/api/paas/v4
+    api_key: "${GLM_API_KEY}" 
+
+  - name: kimi-k2-thinking
+    temperature: 1.0
+    base_url: https://api.moonshot.cn/v1
+    api_key: "${MOONSHOT_API_KEY}"
+
+  
+  - name: kimi-k2-0905-preview
+    temperature: 0.0
+    base_url: https://api.moonshot.cn/v1
+    api_key: "${MOONSHOT_API_KEY}"

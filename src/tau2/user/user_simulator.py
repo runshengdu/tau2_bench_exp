@@ -168,7 +168,7 @@ class UserSimulator(BaseUser):
         user_message = UserMessage(
             role="user",
             content=user_response,
-            cost=assistant_message.cost,
+            cost=None,
             usage=assistant_message.usage,
             raw_data=assistant_message.raw_data,
         )

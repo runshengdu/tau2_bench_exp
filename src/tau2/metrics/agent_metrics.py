@@ -18,12 +18,10 @@ def is_successful(reward: float) -> bool:
 class AgentMetrics(BaseModel):
     avg_reward: float
     pass_hat_ks: dict[int, float]
-    avg_agent_cost: float
 
     def as_dict(self) -> dict:
         data = {
             "avg_reward": self.avg_reward,
-            "avg_agent_cost": self.avg_agent_cost,
         }
         for k, v in self.pass_hat_ks.items():
             data[f"pass_hat_{k}"] = v
@@ -113,7 +111,6 @@ def compute_metrics(results: Results) -> AgentMetrics:
         return AgentMetrics(
             avg_reward=float("nan"),
             pass_hat_ks={},
-            avg_agent_cost=float("nan"),
         )
     df, df_pass_hat_k = prepare_dfs(results)
     avg_reward = df.reward.mean()
@@ -122,11 +119,9 @@ def compute_metrics(results: Results) -> AgentMetrics:
         if match := re.match(r"pass\^(\d+)", column):
             k = int(match.group(1))
             pass_hat_ks[k] = df_pass_hat_k[column].mean()
-    avg_agent_cost = df.agent_cost.mean()
     return AgentMetrics(
         avg_reward=avg_reward,
         pass_hat_ks=pass_hat_ks,
-        avg_agent_cost=avg_agent_cost,
     )
 
 
@@ -135,7 +130,6 @@ def display_metrics(metrics: AgentMetrics) -> None:
     print("📈 Pass^k")
     for k, pass_hat_k in metrics.pass_hat_ks.items():
         print(f"  k={k}: {pass_hat_k}")
-    print(f"💰 Average agent cost: {metrics.avg_agent_cost}")
 
 
 if __name__ == "__main__":

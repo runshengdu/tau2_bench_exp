@@ -2,13 +2,14 @@ import json
 import os
 import re
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 
 import dotenv
 from loguru import logger
 from openai import OpenAI
 
-from tau2.config import DEFAULT_LLM_AGENT, DEFAULT_LLM_USER, DEFAULT_MAX_RETRIES
+from tau2.config import DEFAULT_MAX_RETRIES
 from tau2.data_model.message import (
     AssistantMessage,
     Message,
@@ -18,60 +19,99 @@ from tau2.data_model.message import (
     UserMessage,
 )
 from tau2.environment.tool import Tool
-from tau2.utils.token_cost import TOKEN_COST_PER_MILLION
+from tau2.utils.io_utils import load_file
 
 dotenv.load_dotenv(override=True)
 
 
-def _get_env_var(*names: str) -> Optional[str]:
-    for name in names:
-        candidates = {name, name.upper(), name.lower()}
-        for candidate in candidates:
-            value = os.getenv(candidate)
-            if value:
-                return value.strip('"')
-    return None
+_MODELS_YAML_NAME = "models.yaml"
+_ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-def _resolve_model_override(model: str) -> tuple[Optional[str], Optional[str]]:
+def _models_yaml_path() -> Path:
+    return Path(__file__).resolve().parents[3] / _MODELS_YAML_NAME
+
+
+@lru_cache(maxsize=1)
+def _load_models_yaml() -> dict[str, Any]:
+    path = _models_yaml_path()
+    data = load_file(path)
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid models.yaml format at {path}: expected a mapping")
+    return data
+
+
+def _expand_env_vars(value: Any, *, model: str) -> Any:
+    if isinstance(value, str):
+        def _repl(match: re.Match[str]) -> str:
+            var = match.group(1)
+            env_val = os.getenv(var)
+            if env_val is None:
+                raise ValueError(
+                    f"Environment variable '{var}' is required for model '{model}' in models.yaml"
+                )
+            return env_val
+
+        return _ENV_VAR_PATTERN.sub(_repl, value)
+
+    if isinstance(value, dict):
+        return {k: _expand_env_vars(v, model=model) for k, v in value.items()}
+
+    if isinstance(value, list):
+        return [_expand_env_vars(v, model=model) for v in value]
+
+    return value
+
+
+@lru_cache(maxsize=None)
+def _get_model_config(model: str) -> dict[str, Any]:
+    model = (model or "").strip()
+    if not model:
+        raise ValueError("Model name must be a non-empty string")
+
+    data = _load_models_yaml()
+
+    default_cfg = data.get("default") or {}
+    if not isinstance(default_cfg, dict):
+        raise ValueError("Invalid models.yaml: 'default' must be a mapping")
+
+    models = data.get("models") or []
+    if not isinstance(models, list):
+        raise ValueError("Invalid models.yaml: 'models' must be a list")
+
     model_lc = model.lower()
-    if model_lc.startswith("deepseek"):
-        return (
-            _get_env_var("deepseek_base_url"),
-            _get_env_var("deepseek_api_key"),
-        )
-    if model_lc.startswith("kimi"):
-        return (
-            _get_env_var("kimi_base_url"),
-            _get_env_var("KIMI_API_KEY", "kimi_api_key"),
-        )
+    matched: Optional[dict[str, Any]] = None
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if isinstance(name, str) and name.lower() == model_lc:
+            matched = item
+            break
 
-    if model_lc.startswith(("openai", "google", "anthropic")):
-        return (
-            _get_env_var("openrouter_base_url"),
-            _get_env_var("openrouter_api_key"),
-        )
-    if model_lc.startswith("glm"):
-        return (
-            _get_env_var("glm_base_url"),
-            _get_env_var("glm_api_key"),
-        )
-    if model_lc.startswith("minimax"):
-        return (
-            _get_env_var("minimax_base_url"),
-            _get_env_var("minimax_api_key"),
-        )
-    return (None, None)
+    if matched is None:
+        raise ValueError(f"Model '{model}' not found in models.yaml")
+
+    merged = {**default_cfg, **matched}
+    merged = _expand_env_vars(merged, model=model)
+    return merged
 
 
 @lru_cache(maxsize=None)
 def _build_client(model: str, max_retries: int) -> OpenAI:
-    base_url, api_key = _resolve_model_override(model)
-    kwargs: dict[str, Any] = {"max_retries": max_retries}
-    if base_url:
-        kwargs["base_url"] = base_url
-    if api_key:
-        kwargs["api_key"] = api_key
+    cfg = _get_model_config(model)
+    base_url = cfg.get("base_url")
+    api_key = cfg.get("api_key")
+    if not base_url:
+        raise ValueError(f"Missing 'base_url' for model '{model}' in models.yaml")
+    if not api_key:
+        raise ValueError(f"Missing 'api_key' for model '{model}' in models.yaml")
+
+    kwargs: dict[str, Any] = {
+        "max_retries": max_retries,
+        "base_url": base_url,
+        "api_key": api_key,
+    }
     return OpenAI(**kwargs)
 
 
@@ -79,8 +119,105 @@ def _get_client_for_model(model: str, max_retries: Optional[int]) -> OpenAI:
     retries = max_retries if max_retries is not None else DEFAULT_MAX_RETRIES
     return _build_client(model.lower(), retries)
 
-def get_response_cost(response: Any) -> float:
-    return 0.0
+
+def _model_uses_reasoning_details(model: str) -> bool:
+    return _get_reasoning_details_provider(model) is not None
+
+
+def _get_reasoning_details_provider(model: str) -> Optional[str]:
+    model_lc = (model or "").lower()
+    if "openai" in model_lc:
+        return "openai"
+    if "anthropic" in model_lc:
+        return "anthropic"
+    if "google" in model_lc:
+        return "google"
+    return None
+
+
+def _accumulate_reasoning_details_items(
+    delta_reasoning: list[Any],
+    reasoning_acc: dict[tuple[Any, ...], dict[str, Any]],
+    reasoning_order: list[tuple[Any, ...]],
+    *,
+    key_fn: Any,
+) -> list[Any]:
+    for item in delta_reasoning:
+        if not isinstance(item, dict):
+            continue
+
+        key = key_fn(item)
+
+        if key not in reasoning_acc:
+            reasoning_acc[key] = {}
+            reasoning_order.append(key)
+
+        acc_item = reasoning_acc[key]
+
+        for k, v in item.items():
+            if k in ("summary", "text", "data"):
+                if isinstance(v, str):
+                    prev = acc_item.get(k, "") or ""
+                    acc_item[k] = prev + v
+            elif k == "signature":
+                if isinstance(v, str):
+                    prev = acc_item.get(k, "") or ""
+                    acc_item[k] = prev + v
+            elif k not in acc_item:
+                acc_item[k] = v
+
+    return [reasoning_acc[k] for k in reasoning_order]
+
+
+def _accumulate_openai_reasoning_details(
+    delta_reasoning: list[Any],
+    reasoning_acc: dict[tuple[Any, ...], dict[str, Any]],
+    reasoning_order: list[tuple[Any, ...]],
+) -> list[Any]:
+    def _key(item: dict[str, Any]) -> tuple[Any, ...]:
+        item_id = item.get("id")
+        if item_id:
+            return ("id", item_id)
+        return (item.get("index"), item.get("type"), item.get("format"))
+
+    return _accumulate_reasoning_details_items(
+        delta_reasoning,
+        reasoning_acc,
+        reasoning_order,
+        key_fn=_key,
+    )
+
+
+def _accumulate_anthropic_reasoning_details(
+    delta_reasoning: list[Any],
+    reasoning_acc: dict[tuple[Any, ...], dict[str, Any]],
+    reasoning_order: list[tuple[Any, ...]],
+) -> list[Any]:
+    def _key(item: dict[str, Any]) -> tuple[Any, ...]:
+        return (item.get("index"), item.get("type"), item.get("format"))
+
+    return _accumulate_reasoning_details_items(
+        delta_reasoning,
+        reasoning_acc,
+        reasoning_order,
+        key_fn=_key,
+    )
+
+
+def _accumulate_google_reasoning_details(
+    delta_reasoning: list[Any],
+    reasoning_acc: dict[tuple[Any, ...], dict[str, Any]],
+    reasoning_order: list[tuple[Any, ...]],
+) -> list[Any]:
+    def _key(item: dict[str, Any]) -> tuple[Any, ...]:
+        return (item.get("index"), item.get("type"), item.get("format"))
+
+    return _accumulate_reasoning_details_items(
+        delta_reasoning,
+        reasoning_acc,
+        reasoning_order,
+        key_fn=_key,
+    )
 
 
 def get_response_usage(response: Any) -> Optional[dict]:
@@ -110,14 +247,9 @@ def get_response_usage(response: Any) -> Optional[dict]:
 
 
 def to_openai_messages(messages: list[Message], model: str = "") -> list[dict]:
-    """Convert internal messages to OpenAI-compatible format.
-    
-    Different models use different field names for reasoning:
-    - DeepSeek Reasoner: reasoning_content (required for all assistant messages)
-    - OpenRouter/Anthropic: reasoning_details
-    """
-    model_lc = model.lower()
-    is_deepseek_reasoner = "deepseek-reasoner" in model_lc or "deepseek-r1" in model_lc
+    """Convert internal messages to OpenAI-compatible format."""
+
+    uses_reasoning_details = _model_uses_reasoning_details(model)
     
     openai_messages = []
     for message in messages:
@@ -148,22 +280,17 @@ def to_openai_messages(messages: list[Message], model: str = "") -> list[dict]:
             }
             # Pass reasoning back using the appropriate field name
             if message.reasoning_details is not None:
-                if is_deepseek_reasoner:
-                    # DeepSeek uses reasoning_content field
-                    # Convert list format to string if needed
+                if uses_reasoning_details:
+                    openai_message["reasoning_details"] = message.reasoning_details
+                else:
                     reasoning = message.reasoning_details
                     if isinstance(reasoning, list):
-                        # Extract text from structured reasoning
                         reasoning = "".join(
                             item.get("text", "") or item.get("summary", "") or ""
-                            for item in reasoning if isinstance(item, dict)
+                            for item in reasoning
+                            if isinstance(item, dict)
                         )
-                    openai_message["reasoning_content"] = reasoning if reasoning else ""
-                else:
-                    openai_message["reasoning_details"] = message.reasoning_details
-            elif is_deepseek_reasoner:
-                # DeepSeek requires reasoning_content even if empty
-                openai_message["reasoning_content"] = ""
+                    openai_message["reasoning_content"] = reasoning
             openai_messages.append(openai_message)
         elif isinstance(message, ToolMessage):
             openai_messages.append(
@@ -195,9 +322,11 @@ def generate(
         tool_choice: The tool choice to use.
         **kwargs: Additional arguments to pass to the model.
 
-    Returns: A tuple containing the message and the cost.
+    Returns: The assistant message.
     """
     num_retries = kwargs.pop("num_retries", None)
+    reasoning_details_provider = _get_reasoning_details_provider(model)
+    uses_reasoning_details = _model_uses_reasoning_details(model)
     openai_messages = to_openai_messages(messages, model=model)
     openai_tools = [tool.openai_schema for tool in tools] if tools else None
     if openai_tools and tool_choice is None:
@@ -208,7 +337,6 @@ def generate(
     role: Optional[str] = None
     reasoning: Optional[Any] = None
     reasoning_parts: list[str] = []
-    reasoning_list: list[Any] = []
     reasoning_acc: dict[tuple, dict[str, Any]] = {}
     reasoning_order: list[tuple] = []
     finish_reason = None
@@ -216,6 +344,12 @@ def generate(
     raw_data: Optional[dict] = None
     model_id: Optional[str] = None
     last_chunk: Any = None
+
+    extra_kwargs = {}
+    if "openai" in model.lower():
+        extra_kwargs["reasoning_effort"] = "high"
+    else:
+        extra_kwargs["extra_body"] = {"reasoning": {"enabled": True}}
 
     try:
         
@@ -226,8 +360,7 @@ def generate(
             tool_choice=tool_choice,
             stream=True,
             **kwargs,
-            extra_body={"reasoning": {"enabled": True}},
-
+            **extra_kwargs,
         )
         for chunk in stream:
             last_chunk = chunk
@@ -277,8 +410,9 @@ def generate(
                         if getattr(function, "arguments", None):
                             data["arguments"] += function.arguments or ""
 
-            delta_reasoning = getattr(delta, "reasoning_details", None)
-            if delta_reasoning is None:
+            if uses_reasoning_details:
+                delta_reasoning = getattr(delta, "reasoning_details", None)
+            else:
                 delta_reasoning = getattr(delta, "reasoning_content", None)
             if delta_reasoning:
                 # For string-based streaming reasoning, accumulate all pieces
@@ -286,45 +420,26 @@ def generate(
                     reasoning_parts.append(delta_reasoning)
                     reasoning = "".join(reasoning_parts)
                 elif isinstance(delta_reasoning, list):
-                    # For list-based structured reasoning (e.g., OpenAI/Gemini),
-                    # aggregate entries by (index, type, format) and concatenate
-                    # their string fields (summary/text/data) across chunks.
-                    for item in delta_reasoning:
-                        if not isinstance(item, dict):
-                            reasoning_list.append(item)
-                            continue
-
-                        key = (
-                            item.get("index"),
-                            item.get("type"),
-                            item.get("format"),
+                    if reasoning_details_provider == "openai":
+                        reasoning = _accumulate_openai_reasoning_details(
+                            delta_reasoning,
+                            reasoning_acc,
+                            reasoning_order,
                         )
-
-                        if key not in reasoning_acc:
-                            reasoning_acc[key] = {}
-                            reasoning_order.append(key)
-
-                        acc_item = reasoning_acc[key]
-
-                        # Copy all fields, concatenating string content fields
-                        for k, v in item.items():
-                            if k in ("summary", "text", "data"):
-                                # Concatenate content string fields across chunks
-                                if isinstance(v, str):
-                                    prev = acc_item.get(k, "") or ""
-                                    acc_item[k] = prev + v
-                            elif k == "signature":
-                                # Concatenate signature across chunks
-                                if isinstance(v, str):
-                                    prev = acc_item.get(k, "") or ""
-                                    acc_item[k] = prev + v
-                            elif k not in acc_item:
-                                # Copy other fields once
-                                acc_item[k] = v
-
-                    if reasoning_order:
-                        reasoning_list = [reasoning_acc[k] for k in reasoning_order]
-                        reasoning = reasoning_list
+                    elif reasoning_details_provider == "anthropic":
+                        reasoning = _accumulate_anthropic_reasoning_details(
+                            delta_reasoning,
+                            reasoning_acc,
+                            reasoning_order,
+                        )
+                    elif reasoning_details_provider == "google":
+                        reasoning = _accumulate_google_reasoning_details(
+                            delta_reasoning,
+                            reasoning_acc,
+                            reasoning_order,
+                        )
+                    else:
+                        reasoning = delta_reasoning
                 else:
                     # For non-string payloads, keep the last non-empty value
                     reasoning = delta_reasoning
@@ -385,7 +500,10 @@ def generate(
             if content:
                 aggregated_delta["content"] = content
             if reasoning is not None:
-                aggregated_delta["reasoning_details"] = reasoning
+                if uses_reasoning_details:
+                    aggregated_delta["reasoning_details"] = reasoning
+                else:
+                    aggregated_delta["reasoning_content"] = reasoning
             if tool_calls:
                 aggregated_delta["tool_calls"] = [
                     {
@@ -433,80 +551,7 @@ def generate(
         logger.error(error_msg)
         raise ValueError(error_msg)
 
-    # Compute per-message cost using the same logic as aggregate get_cost
-    try:
-        res = get_cost([message])
-    except Exception as e:
-        logger.warning(f"Failed to compute per-message cost: {e}")
-    else:
-        if res is not None:
-            agent_cost, _ = res
-            message.cost = agent_cost
-
     return message
-
-
-def get_cost(messages: list[Message]) -> tuple[float, float] | None:
-    agent_cost = 0.0
-    user_cost = 0.0
-    has_cost = False
-
-    for message in messages:
-        # Only assistant and user messages incur LLM cost
-        if not isinstance(message, (AssistantMessage, UserMessage)):
-            continue
-
-        usage = message.usage
-        if not usage:
-            continue
-
-        # Try to get the actual model id from the raw response first
-        model_name = None
-        if isinstance(message.raw_data, dict):
-            # Prefer the original requested model name if present, fall back to provider model id
-            model_name = message.raw_data.get("request_model") or message.raw_data.get(
-                "model"
-            )
-
-        # Fallback to defaults if model is missing
-        if not model_name:
-            if isinstance(message, AssistantMessage):
-                model_name = DEFAULT_LLM_AGENT
-            elif isinstance(message, UserMessage):
-                model_name = DEFAULT_LLM_USER
-
-        if not model_name:
-            continue
-
-        key = str(model_name).lower()
-        # Handle simple fine-tuned naming like ft:base:provider::id
-        if key.startswith("ft:"):
-            parts = key.split(":", 2)
-            if len(parts) >= 2 and parts[1]:
-                key = parts[1]
-
-        price = TOKEN_COST_PER_MILLION.get(key)
-        if not price:
-            continue
-
-        prompt_tokens = usage.get("prompt_tokens", 0) or 0
-        completion_tokens = usage.get("completion_tokens", 0) or 0
-
-        input_cost = (prompt_tokens / 1_000_000.0) * float(price["input"])
-        output_cost = (completion_tokens / 1_000_000.0) * float(price["output"])
-        total_cost = input_cost + output_cost
-
-        if isinstance(message, AssistantMessage):
-            agent_cost += total_cost
-            has_cost = True
-        elif isinstance(message, UserMessage):
-            user_cost += total_cost
-            has_cost = True
-
-    if not has_cost:
-        return None
-
-    return round(agent_cost, 6), round(user_cost, 6)
 
 
 def get_token_usage(messages: list[Message]) -> dict:

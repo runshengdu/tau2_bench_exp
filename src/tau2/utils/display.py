@@ -193,12 +193,6 @@ class ConsoleDisplay:
         sim_info.append(f"{simulation.duration:.2f}s\n")
         sim_info.append("Termination Reason: ", style="bold cyan")
         sim_info.append(f"{simulation.termination_reason}\n")
-        if simulation.agent_cost is not None:
-            sim_info.append("Agent Cost: ", style="bold cyan")
-            sim_info.append(f"${simulation.agent_cost:.4f}\n")
-        if simulation.user_cost is not None:
-            sim_info.append("User Cost: ", style="bold cyan")
-            sim_info.append(f"${simulation.user_cost:.4f}\n")
         if simulation.reward_info:
             marker = "✅" if is_successful(simulation.reward_info.reward) else "❌"
             sim_info.append("Reward: ", style="bold cyan")
@@ -346,10 +340,6 @@ class ConsoleDisplay:
             content.append(f"\nk={k}: ", style="bold white")
             content.append(f"{pass_hat_k:.3f}")
 
-        # Add average agent cost section
-        content.append("\n\n💰 Average Cost per Conversation: ", style="bold cyan")
-        content.append(f"${metrics.avg_agent_cost:.4f}\n\n")
-
         # Create and display panel
         metrics_panel = Panel(
             content,
@@ -386,10 +376,6 @@ class MarkdownDisplay:
         output.append(f"**Trial**: {sim.trial}")
         output.append(f"**Duration**: {sim.duration:.2f}s")
         output.append(f"**Termination**: {sim.termination_reason}")
-        if sim.agent_cost is not None:
-            output.append(f"**Agent Cost**: ${sim.agent_cost:.4f}")
-        if sim.user_cost is not None:
-            output.append(f"**User Cost**: ${sim.user_cost:.4f}")
 
         # Add reward info if present
         if sim.reward_info:
