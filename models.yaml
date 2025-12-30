@@ -34,12 +34,12 @@ models:
     api_key: "${OPENROUTER_API_KEY}"
     extra_body: {reasoning: {effort: "high"}}
 
-  - name: minimax-m2
+  - name: MiniMax-M2
     temperature: 1.0
     base_url: https://api.minimaxi.com/v1
     api_key: "${MINIMAX_API_KEY}"
   
-  - name: minimax-m2.1
+  - name: MiniMax-M2.1
     temperature: 1.0
     base_url: https://api.minimaxi.com/v1
     api_key: "${MINIMAX_API_KEY}"
@@ -62,7 +62,7 @@ models:
     api_key: "${GLM_API_KEY}"
     extra_body:
       thinking:
-        type: disabled
+        type: enabled
     #turn off thinking for evaluation
 
 
@@ -70,6 +70,9 @@ models:
     temperature: 1.0
     base_url: https://open.bigmodel.cn/api/paas/v4
     api_key: "${GLM_API_KEY}" 
+    extra_body:
+      thinking:
+        type: enabled
 
   - name: kimi-k2-thinking
     temperature: 1.0
