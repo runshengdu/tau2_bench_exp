@@ -49,30 +49,23 @@ models:
     base_url: https://api.deepseek.com
     api_key: "${DEEPSEEK_API_KEY}"
 
-
   - name: deepseek-reasoner
     temperature: 1.0
     base_url: https://api.deepseek.com
     api_key: "${DEEPSEEK_API_KEY}"
 
-  
   - name: glm-4.6
     temperature: 1.0
     base_url: https://open.bigmodel.cn/api/paas/v4
     api_key: "${GLM_API_KEY}"
-    extra_body:
-      thinking:
-        type: enabled
+    extra_body: {"thinking": {"type": "enabled"}}
     #turn off thinking for evaluation
-
 
   - name: glm-4.7
     temperature: 1.0
     base_url: https://open.bigmodel.cn/api/paas/v4
     api_key: "${GLM_API_KEY}" 
-    extra_body:
-      thinking:
-        type: enabled
+    extra_body: {"thinking": {"type": "enabled"}}
 
   - name: kimi-k2-thinking
     temperature: 1.0
@@ -84,3 +77,9 @@ models:
     temperature: 0.0
     base_url: https://api.moonshot.cn/v1
     api_key: "${MOONSHOT_API_KEY}"
+
+  - name: doubao-seed-1-8-251228
+    temperature: 1.0
+    base_url: https://ark.cn-beijing.volces.com/api/v3
+    api_key: "${ARK_API_KEY}"
+    extra_body: {"reasoning_effort": "high"}
