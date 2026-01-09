@@ -101,12 +101,7 @@ def make_run_name(config: RunConfig) -> str:
     Make a run name from the run config
     """
     clean_llm_agent_name = [x for x in config.llm_agent.split("/") if x][-1]
-    agent_name = f"{config.agent}_{clean_llm_agent_name}"
-
-    clean_llm_user_name = [x for x in config.llm_user.split("/") if x][-1]
-    user_name = f"{config.user}_{clean_llm_user_name}"
-
-    return f"{get_now()}_{config.domain}_{agent_name}_{user_name}"
+    return f"{clean_llm_agent_name}_{get_now()}"
 
 
 def run_domain(config: RunConfig) -> Results:
@@ -145,10 +140,10 @@ def run_domain(config: RunConfig) -> Results:
         ConsoleDisplay.console.print(console_text)
 
     num_trials = config.num_trials
-    save_to = config.save_to
-    if save_to is None:
-        save_to = make_run_name(config)
-    save_to = DATA_DIR / "simulations" / f"{save_to}.json"
+    if config.save_to is None:
+        save_to = DATA_DIR / "simulations" / config.domain / f"{make_run_name(config)}.json"
+    else:
+        save_to = config.save_to
     simulation_results = run_tasks(
         domain=config.domain,
         tasks=tasks,
