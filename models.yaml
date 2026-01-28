@@ -73,8 +73,8 @@ models:
     api_key: "${MOONSHOT_API_KEY}"
 
   
-  - name: kimi-k2-0905-preview
-    temperature: 0.0
+  - name: kimi-k2.5
+    temperature: 1.0
     base_url: https://api.moonshot.cn/v1
     api_key: "${MOONSHOT_API_KEY}"
 

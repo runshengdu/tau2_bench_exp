@@ -115,7 +115,7 @@ def add_run_args(parser):
         "--save-to",
         type=str,
         required=False,
-        help="The path to save the simulation results. Will be saved to data/simulations/<save_to>.json. If not provided, will save to <domain>_<agent>_<user>_<llm_agent>_<llm_user>_<timestamp>.json. If the file already exists, it will try to resume the run.",
+        help="The path to save the simulation results. Will be saved to data/simulations/<save_to>.json. If not provided, will save to data/simulations/<domain>/<llm_agent>/<timestamp>.json. If the file already exists, it will try to resume the run.",
     )
     parser.add_argument(
         "--max-concurrency",

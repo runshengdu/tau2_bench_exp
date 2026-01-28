@@ -100,8 +100,7 @@ def make_run_name(config: RunConfig) -> str:
     """
     Make a run name from the run config
     """
-    clean_llm_agent_name = [x for x in config.llm_agent.split("/") if x][-1]
-    return f"{clean_llm_agent_name}_{get_now()}"
+    return get_now()
 
 
 def run_domain(config: RunConfig) -> Results:
@@ -141,7 +140,18 @@ def run_domain(config: RunConfig) -> Results:
 
     num_trials = config.num_trials
     if config.save_to is None:
-        save_to = DATA_DIR / "simulations" / config.domain / f"{make_run_name(config)}.json"
+        clean_llm_agent_name = (
+            [x for x in config.llm_agent.replace("\\", "/").split("/") if x][-1]
+            if config.llm_agent
+            else "unknown"
+        )
+        save_to = (
+            DATA_DIR
+            / "simulations"
+            / config.domain
+            / clean_llm_agent_name
+            / f"{make_run_name(config)}.json"
+        )
     else:
         save_to = config.save_to
     simulation_results = run_tasks(
@@ -327,8 +337,7 @@ def run_tasks(
         # Create new save file
         else:
             # Check if save_to exists and create parent directories if needed
-            if not save_to.parent.exists():
-                save_to.parent.mkdir(parents=True, exist_ok=True)
+            save_to.parent.mkdir(parents=True, exist_ok=True)
             logger.info(f"Saving simulation batch to {save_to}")
             with open(save_to, "w") as fp:
                 fp.write(simulation_results.model_dump_json(indent=2))
