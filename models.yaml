@@ -12,8 +12,7 @@ models:
     temperature: 1.0
     base_url: https://openrouter.ai/api/v1
     api_key: "${OPENROUTER_API_KEY}"
-    extra_body: {"reasoning": {"effort": "high"}}
-
+    extra_body: {"reasoning": {"effort": "xhigh"}}
 
   - name: anthropic/claude-sonnet-4.5
     temperature: 1.0
